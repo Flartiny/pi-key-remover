@@ -1,0 +1,43 @@
+{
+  "name": "pi-key-remover",
+  "version": "0.1.0",
+  "description": "A Pi extension that redacts API keys and tokens before they enter model context, with secure environment-backed execution.",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "security",
+    "api-key",
+    "secret-redaction"
+  ],
+  "license": "MIT",
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "scripts": {
+    "test": "tsx --test test/**/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.84.2",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.20.0",
+    "typebox": "^1.0.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
