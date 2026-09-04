@@ -20,7 +20,7 @@ OPENAI_API_KEY=<secret:OPENAI_API_KEY>
 - 同一密钥使用稳定的具名占位符；已生成的占位符在多层生命周期过滤中保持不变，不会被重复识别或嵌套。
 - 默认将用户粘贴的密钥保存到项目隔离、权限为 `0600` 的用户级 vault；不会把 vault 放进 Git 工作树。
 - 从 `.env` / `.env.local` 安全解析变量（只解析，不 `source`，不会执行文件内容）。
-- 提供 `/key-remover` 与短别名 `/kr` 快捷开关。
+- 提供 `/key-remover` 指令，可通过参数补全切换保护、切换 capture、查看状态或重新加载环境。
 
 ## 安装
 
@@ -45,7 +45,7 @@ pi install /absolute/path/to/pi-key-remover
 输入：
 
 ```text
-DEPLOY_API_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx，请用它查询仓库。
+DEPLOY_API_TOKEN=example-value，请用它查询仓库。
 ```
 
 模型实际看到：
@@ -61,7 +61,7 @@ DEPLOY_API_TOKEN=<secret:DEPLOY_API_TOKEN>，请用它查询仓库。
 在项目的 `.env` 或 `.env.local` 中写入：
 
 ```dotenv
-GITHUB_TOKEN="ghp_..."
+GITHUB_TOKEN="example"
 ```
 
 不要把 `.env` 提交到 Git。启动或执行 `/key-remover reload` 后，可以只告诉模型：
@@ -84,18 +84,16 @@ secret_exec({
 ### 快捷指令
 
 ```text
-/key-remover status       # 查看状态（默认动作）
-/key-remover on           # 开启输入与上下文过滤
-/key-remover off          # 关闭输入与上下文过滤
-/key-remover toggle       # 快速切换
-/key-remover capture on   # 自动保存粘贴的密钥到 vault
-/key-remover capture off  # 仅在当前会话内保留，不落盘
-/key-remover reload       # 重新读取 .env、进程环境和 vault
+/key-remover          # 查看状态（默认动作）
+/key-remover status   # 查看状态
+/key-remover toggle   # 切换输入与上下文过滤
+/key-remover capture  # 切换是否自动保存粘贴的密钥
+/key-remover reload   # 重新读取配置、.env、进程环境和 vault
 ```
 
-短别名 `/kr` 支持相同参数，例如 `/kr toggle`。开关状态保存在 Pi session 的非上下文 custom entry 中，恢复会话时会恢复。
+在交互界面输入 `/key-remover` 并键入空格后，会显示参数补全和说明。保护开关与 capture 开关状态保存在 Pi session 的非上下文 custom entry 中，恢复会话时会恢复。
 
-> `off` 会允许后续原始消息进入会话和模型。`secret_exec` 自身仍始终对输出做脱敏，以避免它变成明文泄漏通道。
+> 保护状态切换为 OFF 后，后续原始消息可以进入会话和模型。`secret_exec` 自身仍始终对输出做脱敏，以避免它变成明文泄漏通道。
 
 ## 配置
 

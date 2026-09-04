@@ -179,8 +179,36 @@ async function retainDetectedSecrets(
     await persistSecrets(state.cwd, state.config, values);
 }
 
+const COMMAND_COMPLETIONS = [
+  {
+    value: "toggle",
+    label: "toggle",
+    description: "Toggle key protection",
+  },
+  {
+    value: "capture",
+    label: "capture",
+    description: "Toggle pasted-secret capture",
+  },
+  { value: "status", label: "status", description: "Show current status" },
+  {
+    value: "reload",
+    label: "reload",
+    description: "Reload configuration and secrets",
+  },
+];
+
+function getCommandArgumentCompletions(prefix: string) {
+  if (/\s/.test(prefix)) return null;
+  const normalizedPrefix = prefix.toLowerCase();
+  const matches = COMMAND_COMPLETIONS.filter((item) =>
+    item.value.startsWith(normalizedPrefix),
+  );
+  return matches.length > 0 ? matches : null;
+}
+
 function commandHelp(): string {
-  return "Usage: /key-remover [on|off|toggle|status|capture on|capture off|reload]";
+  return "Usage: /key-remover [toggle|capture|status|reload]";
 }
 
 export default function keyRemoverExtension(pi: ExtensionAPI): void {
@@ -298,14 +326,15 @@ export default function keyRemoverExtension(pi: ExtensionAPI): void {
     const args = rawArgs.trim().toLowerCase().split(/\s+/).filter(Boolean);
     const action = args[0] ?? "status";
 
-    if (action === "on") state.enabled = true;
-    else if (action === "off") state.enabled = false;
-    else if (action === "toggle") state.enabled = !state.enabled;
-    else if (action === "capture" && args[1] === "on")
-      state.capturePastedSecrets = true;
-    else if (action === "capture" && args[1] === "off")
-      state.capturePastedSecrets = false;
-    else if (action === "reload") {
+    if (args.length > 1) {
+      ctx.ui.notify(commandHelp(), "warning");
+      return;
+    }
+
+    if (action === "toggle") state.enabled = !state.enabled;
+    else if (action === "capture") {
+      state.capturePastedSecrets = !state.capturePastedSecrets;
+    } else if (action === "reload") {
       await reloadEnvironment(state);
       ctx.ui.notify("Key remover environment reloaded.", "info");
     } else if (action !== "status") {
@@ -313,7 +342,7 @@ export default function keyRemoverExtension(pi: ExtensionAPI): void {
       return;
     }
 
-    if (action !== "status" && action !== "reload") appendState(pi, state);
+    if (action === "toggle" || action === "capture") appendState(pi, state);
     updateStatus(ctx, state);
     ctx.ui.notify(
       `Key remover: ${state.enabled ? "ON" : "OFF"}; capture: ${state.capturePastedSecrets ? "ON" : "OFF"}; secrets available: ${Object.keys(state.environment).filter((name) => state.registry.getRegisteredSecrets().some((secret) => secret.envName === name)).length}.`,
@@ -322,11 +351,8 @@ export default function keyRemoverExtension(pi: ExtensionAPI): void {
   };
 
   pi.registerCommand("key-remover", {
-    description: "Toggle API key/token protection or show its status",
-    handler: handleCommand,
-  });
-  pi.registerCommand("kr", {
-    description: "Short alias for /key-remover",
+    description: "Manage API key/token protection",
+    getArgumentCompletions: getCommandArgumentCompletions,
     handler: handleCommand,
   });
 

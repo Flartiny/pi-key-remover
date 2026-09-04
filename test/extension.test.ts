@@ -10,12 +10,21 @@ function placeholder(envName: string): string {
   return `${openingBracket}secret:${envName}>`;
 }
 
+interface CommandCompletion {
+  value: string;
+  label: string;
+  description?: string;
+}
+
+interface CommandDefinition {
+  description: string;
+  getArgumentCompletions?: (prefix: string) => CommandCompletion[] | null;
+  handler: (args: string, ctx: unknown) => Promise<void>;
+}
+
 interface Harness {
   handlers: Map<string, Array<(...args: unknown[]) => unknown>>;
-  commands: Map<
-    string,
-    { handler: (args: string, ctx: unknown) => Promise<void> }
-  >;
+  commands: Map<string, CommandDefinition>;
   tools: Map<
     string,
     {
@@ -29,10 +38,7 @@ interface Harness {
 
 function createHarness(): Harness & { pi: unknown } {
   const handlers = new Map<string, Array<(...args: unknown[]) => unknown>>();
-  const commands = new Map<
-    string,
-    { handler: (args: string, ctx: unknown) => Promise<void> }
-  >();
+  const commands = new Map<string, CommandDefinition>();
   const tools = new Map<
     string,
     {
@@ -46,10 +52,7 @@ function createHarness(): Harness & { pi: unknown } {
     on(name: string, handler: (...args: unknown[]) => unknown) {
       handlers.set(name, [...(handlers.get(name) ?? []), handler]);
     },
-    registerCommand(
-      name: string,
-      command: { handler: (args: string, ctx: unknown) => Promise<void> },
-    ) {
+    registerCommand(name: string, command: CommandDefinition) {
       commands.set(name, command);
     },
     registerTool(tool: {
@@ -335,12 +338,53 @@ describe("pi-key-remover extension", () => {
 
     const command = harness.commands.get("key-remover");
     assert.ok(command);
-    await command.handler("off", ctx);
+    assert.equal(harness.commands.has("kr"), false);
+    assert.deepEqual(command.getArgumentCompletions?.(""), [
+      {
+        value: "toggle",
+        label: "toggle",
+        description: "Toggle key protection",
+      },
+      {
+        value: "capture",
+        label: "capture",
+        description: "Toggle pasted-secret capture",
+      },
+      { value: "status", label: "status", description: "Show current status" },
+      {
+        value: "reload",
+        label: "reload",
+        description: "Reload configuration and secrets",
+      },
+    ]);
+    assert.deepEqual(command.getArgumentCompletions?.("c"), [
+      {
+        value: "capture",
+        label: "capture",
+        description: "Toggle pasted-secret capture",
+      },
+    ]);
+    assert.equal(command.getArgumentCompletions?.("unknown"), null);
+    assert.equal(command.getArgumentCompletions?.("capture "), null);
+
+    await command.handler("toggle", ctx);
     assert.deepEqual(await invoke(harness, "input", { text: pasted }, ctx), {
       action: "continue",
     });
+    await command.handler("toggle", ctx);
+    await command.handler("capture", ctx);
+    assert.deepEqual(harness.entries.at(-1)?.data, {
+      enabled: true,
+      capturePastedSecrets: true,
+    });
+    const entryCount = harness.entries.length;
     await command.handler("on", ctx);
-    assert.equal(harness.entries.length, 2);
+    await command.handler("capture on", ctx);
+    assert.equal(harness.entries.length, entryCount);
+    assert.equal(
+      ctx.notifications.at(-1),
+      "Usage: /key-remover [toggle|capture|status|reload]",
+    );
 
     const tool = harness.tools.get("secret_exec");
     assert.ok(tool);
