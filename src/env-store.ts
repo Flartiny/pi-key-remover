@@ -178,26 +178,57 @@ export async function loadSecretEnvironment(
   return values;
 }
 
-export async function persistSecrets(
-  cwd: string,
+async function replaceVaultContents(
+  vaultPath: string,
   config: KeyRemoverConfig,
-  secrets: Readonly<Record<string, string>>,
-): Promise<string> {
-  const vaultPath = resolveVaultPath(cwd, config.vaultPath);
+  values: Readonly<Record<string, string>>,
+): Promise<void> {
   const directory = dirname(vaultPath);
   await mkdir(directory, { recursive: true, mode: 0o700 });
   // 仅收紧扩展自有默认目录；自定义路径的父目录可能是项目根目录或共享系统目录。
   if (!config.vaultPath) await chmod(directory, 0o700);
 
-  const current = await readEnvIfPresent(vaultPath);
-  const next = { ...current, ...secrets };
   const temporaryPath = `${vaultPath}.tmp-${process.pid}-${Date.now()}`;
-  await writeFile(temporaryPath, serializeEnv(next), {
+  await writeFile(temporaryPath, serializeEnv(values), {
     encoding: "utf8",
     mode: 0o600,
   });
   await chmod(temporaryPath, 0o600);
   await rename(temporaryPath, vaultPath);
   await chmod(vaultPath, 0o600);
+}
+
+export async function listPersistedSecretNames(
+  cwd: string,
+  config: KeyRemoverConfig,
+): Promise<string[]> {
+  const vault = await readEnvIfPresent(resolveVaultPath(cwd, config.vaultPath));
+  return Object.keys(vault).sort((left, right) => left.localeCompare(right));
+}
+
+export async function deletePersistedSecret(
+  cwd: string,
+  config: KeyRemoverConfig,
+  envName: string,
+): Promise<boolean> {
+  const vaultPath = resolveVaultPath(cwd, config.vaultPath);
+  const current = await readEnvIfPresent(vaultPath);
+  if (!Object.hasOwn(current, envName)) return false;
+
+  const next = { ...current };
+  delete next[envName];
+  await replaceVaultContents(vaultPath, config, next);
+  return true;
+}
+
+export async function persistSecrets(
+  cwd: string,
+  config: KeyRemoverConfig,
+  secrets: Readonly<Record<string, string>>,
+): Promise<string> {
+  const vaultPath = resolveVaultPath(cwd, config.vaultPath);
+  const current = await readEnvIfPresent(vaultPath);
+  const next = { ...current, ...secrets };
+  await replaceVaultContents(vaultPath, config, next);
   return vaultPath;
 }

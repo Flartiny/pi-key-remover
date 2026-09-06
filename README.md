@@ -8,12 +8,13 @@ OPENAI_API_KEY=sk-proj-……
 OPENAI_API_KEY=<secret:OPENAI_API_KEY>
 ```
 
-扩展同时提供 `secret_exec` 工具：模型只需要在命令中引用 `$OPENAI_API_KEY`，扩展会从环境或模型上下文之外的本地 vault 注入实际值，并在工具输出进入上下文前再次脱敏。密钥值不需要出现在模型生成的命令中。
+扩展同时提供 `secret_list` 与 `secret_exec` 工具：模型可先查询当前可用的具名占位符，再在命令中引用 `$OPENAI_API_KEY`；扩展会从环境或模型上下文之外的本地 vault 注入实际值，并在工具输出进入上下文前再次脱敏。密钥值不会由 `secret_list` 返回，也不需要出现在模型生成的命令中。
 
 ## 功能
 
 - 在 Pi 的 `input` 阶段转换新用户消息，并在 `message_end` 阶段保护 template/skill 展开后的内容，原始 key 不写入会话。
 - 在 `context`、system prompt 和最终 provider payload 阶段再次过滤，保护恢复的旧会话和其他上下文来源；图片 base64、thinking/reasoning 块与 provider opaque 字段不会作为文本改写。
+- 提供只读的 `secret_list` 工具，仅列出当前可供 `secret_exec` 使用的占位符，不返回密钥值。
 - 对工具结果做二次脱敏，防止命令意外回显已知密钥。
 - 高置信度密钥会全局匹配；`production` 等低熵密码只在敏感赋值或完整输出等明确上下文中替换，避免误伤普通文本。
 - 识别常见 OpenAI、Anthropic、GitHub、GitLab、Google、AWS、Slack、Stripe、npm、PyPI、Hugging Face key，JWT、Bearer token、webhook URL、URL 密码、PEM private key，以及 `*_API_KEY` / `*_TOKEN` / `*_SECRET` / `*_PASSWORD` 等赋值。
@@ -81,6 +82,16 @@ secret_exec({
 
 `secret_exec` 只按名称选择变量，命令文本和模型上下文中都不需要出现实际 key。默认执行前会向用户展示命令和变量名并要求确认；扩展还会在返回结果中替换任何原样回显的已选择密钥。
 
+### 3. 在新会话中发现可用 key
+
+模型可以先调用只读工具：
+
+```text
+secret_list({})
+```
+
+该工具只返回排序后的具名占位符，例如 `<secret:GITHUB_TOKEN>`，不会读取或返回密钥值。列表覆盖当前可供 `secret_exec` 使用的受保护变量，包括进程环境、dotenv、当前项目 vault 和当前会话内存中的 key。
+
 ### 快捷指令
 
 ```text
@@ -88,10 +99,13 @@ secret_exec({
 /key-remover status   # 查看状态
 /key-remover toggle   # 切换输入与上下文过滤
 /key-remover capture  # 切换是否自动保存粘贴的密钥
+/key-remover delete   # 交互式删除一个 capture vault 中的 key
 /key-remover reload   # 重新读取配置、.env、进程环境和 vault
 ```
 
 在交互界面输入 `/key-remover` 并键入空格后，会显示参数补全和说明。保护开关与 capture 开关状态保存在 Pi session 的非上下文 custom entry 中，恢复会话时会恢复。
+
+`delete` 只列出当前项目 capture vault 中的变量名，不显示密钥值；选择一个变量并二次确认后原子更新 vault。它不会修改项目 `.env`、`.env.local` 或 `process.env`。如果同名变量仍由其他环境来源提供，删除后插件会给出警告，该变量仍保持可用。
 
 > 保护状态切换为 OFF 后，后续原始消息可以进入会话和模型。`secret_exec` 自身仍始终对输出做脱敏，以避免它变成明文泄漏通道。
 
@@ -148,4 +162,4 @@ npm install
 npm run check
 ```
 
-测试覆盖 key/token 识别、上下文保持、dotenv 安全解析、vault 权限、会话开关，以及 `secret_exec` 注入和输出脱敏。
+测试覆盖 key/token 识别、上下文保持、dotenv 安全解析、vault 权限、会话开关、`secret_list` 的纯占位符输出，以及 `secret_exec` 注入和输出脱敏。

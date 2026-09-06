@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -73,6 +73,10 @@ function createHarness(): Harness & { pi: unknown } {
 function createContext(cwd: string) {
   const notifications: string[] = [];
   const statuses: string[] = [];
+  const selections: string[] = [];
+  const selectionPrompts: Array<{ title: string; options: string[] }> = [];
+  const confirmations: Array<{ title: string; message: string }> = [];
+  const confirmationResults: boolean[] = [];
   return {
     cwd,
     hasUI: true,
@@ -82,8 +86,13 @@ function createContext(cwd: string) {
       notify(message: string) {
         notifications.push(message);
       },
-      async confirm() {
-        return true;
+      async select(title: string, options: string[]) {
+        selectionPrompts.push({ title, options });
+        return selections.shift();
+      },
+      async confirm(title: string, message: string) {
+        confirmations.push({ title, message });
+        return confirmationResults.shift() ?? true;
       },
       setStatus(_id: string, value: string | undefined) {
         if (value) statuses.push(value);
@@ -91,6 +100,10 @@ function createContext(cwd: string) {
     },
     notifications,
     statuses,
+    selections,
+    selectionPrompts,
+    confirmations,
+    confirmationResults,
   };
 }
 
@@ -112,7 +125,11 @@ describe("pi-key-remover extension", () => {
     await mkdir(join(cwd, ".pi"));
     await writeFile(
       join(cwd, ".pi", "key-remover.json"),
-      JSON.stringify({ capturePastedSecrets: false, envFiles: [".env"] }),
+      JSON.stringify({
+        capturePastedSecrets: false,
+        envFiles: [".env"],
+        vaultPath: "vault.env",
+      }),
     );
     const serviceSecret = "service-secret-value-123456789";
     const opaqueSecret = "selected-opaque-credential-123456";
@@ -124,7 +141,30 @@ describe("pi-key-remover extension", () => {
     const harness = createHarness();
     keyRemoverExtension(harness.pi as never);
     const ctx = createContext(cwd);
+    const listTool = harness.tools.get("secret_list");
+    assert.ok(listTool);
+    const emptyListResult = await listTool.execute(
+      "list-before-start",
+      {},
+      ctx,
+    );
+    assert.deepEqual(emptyListResult.content, [
+      { type: "text", text: "No protected secrets are currently available." },
+    ]);
+
     await invoke(harness, "session_start", { reason: "startup" }, ctx);
+    const loadedListResult = await listTool.execute(
+      "list-after-start",
+      {},
+      ctx,
+    );
+    const loadedListText = loadedListResult.content[0]?.text ?? "";
+    assert.equal(loadedListResult.content[0]?.type, "text");
+    assert.ok(
+      loadedListText.startsWith("Available protected secret placeholders:\n"),
+    );
+    assert.ok(loadedListText.includes(`- ${placeholder("SERVICE_API_KEY")}`));
+    assert.ok(!loadedListText.includes(serviceSecret));
 
     const pastedOpenAiKey = `sk-proj-${"Q7w8E9r0".repeat(5)}`;
     const openAiInput = (await invoke(
@@ -350,6 +390,11 @@ describe("pi-key-remover extension", () => {
         label: "capture",
         description: "Toggle pasted-secret capture",
       },
+      {
+        value: "delete",
+        label: "delete",
+        description: "Delete one captured key",
+      },
       { value: "status", label: "status", description: "Show current status" },
       {
         value: "reload",
@@ -383,7 +428,7 @@ describe("pi-key-remover extension", () => {
     assert.equal(harness.entries.length, entryCount);
     assert.equal(
       ctx.notifications.at(-1),
-      "Usage: /key-remover [toggle|capture|status|reload]",
+      "Usage: /key-remover [toggle|capture|delete|status|reload]",
     );
 
     const tool = harness.tools.get("secret_exec");
@@ -422,5 +467,68 @@ describe("pi-key-remover extension", () => {
     assert.ok(!toolResult.content[0]?.text.includes(expandedSecret));
     assert.ok(!toolResult.content[0]?.text.includes(opaqueSecret));
     assert.ok(ctx.statuses.includes("keys: protected"));
+
+    const removableName = ["REMOVABLE", "TOKEN"].join("_");
+    const removableValue = `remove-${"M3n4B5v6".repeat(4)}`;
+    const capturedInput = (await invoke(
+      harness,
+      "input",
+      {
+        text: `${removableName}=${removableValue}`,
+        images: [],
+        source: "interactive",
+      },
+      ctx,
+    )) as { action: string; text: string };
+    assert.equal(capturedInput.action, "transform");
+    assert.ok(
+      (await readFile(join(cwd, "vault.env"), "utf8")).includes(removableName),
+    );
+
+    const nextSessionHarness = createHarness();
+    keyRemoverExtension(nextSessionHarness.pi as never);
+    const nextSessionContext = createContext(cwd);
+    await invoke(
+      nextSessionHarness,
+      "session_start",
+      { reason: "startup" },
+      nextSessionContext,
+    );
+    const nextSessionListTool = nextSessionHarness.tools.get("secret_list");
+    assert.ok(nextSessionListTool);
+    const nextSessionList = await nextSessionListTool.execute(
+      "list-next-session",
+      {},
+      nextSessionContext,
+    );
+    const nextSessionListText = nextSessionList.content[0]?.text ?? "";
+    assert.ok(nextSessionListText.includes(`- ${placeholder(removableName)}`));
+    assert.ok(!nextSessionListText.includes(removableValue));
+
+    ctx.selections.push(removableName);
+    ctx.confirmationResults.push(false);
+    await command.handler("delete", ctx);
+    assert.ok(
+      (await readFile(join(cwd, "vault.env"), "utf8")).includes(removableName),
+    );
+
+    ctx.selections.push(removableName);
+    ctx.confirmationResults.push(true);
+    await command.handler("delete", ctx);
+    assert.deepEqual(ctx.selectionPrompts.at(-1), {
+      title: "Delete captured key",
+      options: [removableName],
+    });
+    assert.deepEqual(ctx.confirmations.at(-1), {
+      title: "Delete captured key?",
+      message: `${removableName} will be removed from this project's capture vault.`,
+    });
+    assert.ok(
+      !(await readFile(join(cwd, "vault.env"), "utf8")).includes(removableName),
+    );
+    assert.equal(
+      ctx.notifications.at(-1),
+      `Deleted ${removableName} from the capture vault.`,
+    );
   });
 });

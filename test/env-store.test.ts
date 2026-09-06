@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import {
+  deletePersistedSecret,
+  listPersistedSecretNames,
   loadSecretEnvironment,
   parseEnv,
   persistSecrets,
@@ -68,6 +70,38 @@ describe("environment storage", () => {
       if (original === undefined) delete process.env.PRECEDENCE_API_KEY;
       else process.env.PRECEDENCE_API_KEY = original;
     }
+  });
+
+  it("lists and atomically deletes one captured vault entry", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-key-remover-delete-"));
+    const firstName = ["FIRST", "TOKEN"].join("_");
+    const secondName = ["SECOND", "API", "KEY"].join("_");
+    await persistSecrets(cwd, TEST_CONFIG, {
+      [firstName]: `first-${"A1b2C3d4".repeat(3)}`,
+      [secondName]: `second-${"Q7w8E9r0".repeat(3)}`,
+    });
+
+    assert.deepEqual(await listPersistedSecretNames(cwd, TEST_CONFIG), [
+      firstName,
+      secondName,
+    ]);
+    assert.equal(
+      await deletePersistedSecret(cwd, TEST_CONFIG, secondName),
+      true,
+    );
+    assert.equal(
+      await deletePersistedSecret(cwd, TEST_CONFIG, secondName),
+      false,
+    );
+    assert.deepEqual(parseEnv(await readFile(join(cwd, "vault.env"), "utf8")), {
+      [firstName]: `first-${"A1b2C3d4".repeat(3)}`,
+    });
+    assert.equal((await stat(join(cwd, "vault.env"))).mode & 0o777, 0o600);
+  });
+
+  it("returns an empty captured-key list when the vault does not exist", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-key-remover-empty-vault-"));
+    assert.deepEqual(await listPersistedSecretNames(cwd, TEST_CONFIG), []);
   });
 
   it("persists a merged vault with owner-only permissions without changing a custom parent", async () => {

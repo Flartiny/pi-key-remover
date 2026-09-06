@@ -5,7 +5,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
+  deletePersistedSecret,
   type KeyRemoverConfig,
+  listPersistedSecretNames,
   loadConfig,
   loadSecretEnvironment,
   persistSecrets,
@@ -179,6 +181,62 @@ async function retainDetectedSecrets(
     await persistSecrets(state.cwd, state.config, values);
 }
 
+function getAvailableSecretNames(state: RuntimeState): string[] {
+  const environmentNames = new Set(Object.keys(state.environment));
+  return state.registry
+    .getRegisteredSecrets()
+    .map((secret) => secret.envName)
+    .filter((name) => environmentNames.has(name))
+    .sort((left, right) => left.localeCompare(right));
+}
+
+async function deleteCapturedKey(
+  state: RuntimeState,
+  ctx: ExtensionContext,
+): Promise<void> {
+  if (!ctx.hasUI) {
+    ctx.ui.notify(
+      "Interactive deletion is unavailable without a UI.",
+      "warning",
+    );
+    return;
+  }
+
+  const names = await listPersistedSecretNames(state.cwd, state.config);
+  if (names.length === 0) {
+    ctx.ui.notify("No captured keys are stored for this project.", "info");
+    return;
+  }
+
+  const selected = await ctx.ui.select("Delete captured key", names);
+  if (!selected) return;
+  const confirmed = await ctx.ui.confirm(
+    "Delete captured key?",
+    `${selected} will be removed from this project's capture vault.`,
+  );
+  if (!confirmed) return;
+
+  const deleted = await deletePersistedSecret(
+    state.cwd,
+    state.config,
+    selected,
+  );
+  if (!deleted) {
+    ctx.ui.notify(`Captured key ${selected} was not found.`, "warning");
+    return;
+  }
+
+  await reloadEnvironment(state);
+  if (Object.hasOwn(state.environment, selected)) {
+    ctx.ui.notify(
+      `Deleted ${selected} from the capture vault, but it remains available from another environment source.`,
+      "warning",
+    );
+    return;
+  }
+  ctx.ui.notify(`Deleted ${selected} from the capture vault.`, "info");
+}
+
 const COMMAND_COMPLETIONS = [
   {
     value: "toggle",
@@ -189,6 +247,11 @@ const COMMAND_COMPLETIONS = [
     value: "capture",
     label: "capture",
     description: "Toggle pasted-secret capture",
+  },
+  {
+    value: "delete",
+    label: "delete",
+    description: "Delete one captured key",
   },
   { value: "status", label: "status", description: "Show current status" },
   {
@@ -208,7 +271,7 @@ function getCommandArgumentCompletions(prefix: string) {
 }
 
 function commandHelp(): string {
-  return "Usage: /key-remover [toggle|capture|status|reload]";
+  return "Usage: /key-remover [toggle|capture|delete|status|reload]";
 }
 
 export default function keyRemoverExtension(pi: ExtensionAPI): void {
@@ -334,6 +397,10 @@ export default function keyRemoverExtension(pi: ExtensionAPI): void {
     if (action === "toggle") state.enabled = !state.enabled;
     else if (action === "capture") {
       state.capturePastedSecrets = !state.capturePastedSecrets;
+    } else if (action === "delete") {
+      await deleteCapturedKey(state, ctx);
+      updateStatus(ctx, state);
+      return;
     } else if (action === "reload") {
       await reloadEnvironment(state);
       ctx.ui.notify("Key remover environment reloaded.", "info");
@@ -345,7 +412,7 @@ export default function keyRemoverExtension(pi: ExtensionAPI): void {
     if (action === "toggle" || action === "capture") appendState(pi, state);
     updateStatus(ctx, state);
     ctx.ui.notify(
-      `Key remover: ${state.enabled ? "ON" : "OFF"}; capture: ${state.capturePastedSecrets ? "ON" : "OFF"}; secrets available: ${Object.keys(state.environment).filter((name) => state.registry.getRegisteredSecrets().some((secret) => secret.envName === name)).length}.`,
+      `Key remover: ${state.enabled ? "ON" : "OFF"}; capture: ${state.capturePastedSecrets ? "ON" : "OFF"}; secrets available: ${getAvailableSecretNames(state).length}.`,
       state.enabled ? "info" : "warning",
     );
   };
@@ -354,6 +421,31 @@ export default function keyRemoverExtension(pi: ExtensionAPI): void {
     description: "Manage API key/token protection",
     getArgumentCompletions: getCommandArgumentCompletions,
     handler: handleCommand,
+  });
+
+  pi.registerTool({
+    name: "secret_list",
+    label: "Secret List",
+    description:
+      "List protected secret placeholders currently available to secret_exec. Returns names only, never secret values.",
+    promptSnippet: "List protected secrets available to secret_exec",
+    promptGuidelines: [
+      "Use secret_list when a task needs a protected key but the current conversation does not identify its placeholder. It returns names only, never secret values.",
+    ],
+    parameters: Type.Object({}),
+    execute: () => {
+      const names = getAvailableSecretNames(state);
+      const text =
+        names.length === 0
+          ? "No protected secrets are currently available."
+          : `Available protected secret placeholders:\n${names
+              .map((name) => `- <secret:${name}>`)
+              .join("\n")}`;
+      return Promise.resolve({
+        content: [{ type: "text" as const, text }],
+        details: { count: names.length },
+      });
+    },
   });
 
   pi.registerTool({
